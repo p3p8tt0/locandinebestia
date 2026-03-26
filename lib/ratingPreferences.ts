@@ -39,20 +39,26 @@ export const RATING_PROVIDER_OPTIONS = [
   {
     id: 'metacritic',
     label: 'Metacritic',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=metacritic.com&sz=64',
+    iconUrl: 'https://www.metacritic.com/a/img/favicon.svg',
     accentColor: '#66cc33',
   },
   {
     id: 'metacriticuser',
     label: 'Metacritic User',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=metacritic.com&sz=64',
-    accentColor: '#4caf50',
+    iconUrl: 'https://i.postimg.cc/g2j23W7g/Metacritic-M.png',
+    accentColor: '#66cc33',
   },
   {
     id: 'trakt',
     label: 'Trakt',
     iconUrl: 'https://www.google.com/s2/favicons?domain=trakt.tv&sz=64',
     accentColor: '#ed1c24',
+  },
+  {
+    id: 'simkl',
+    label: 'SIMKL',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=simkl.com&sz=64',
+    accentColor: '#00b4ff',
   },
   {
     id: 'rogerebert',
@@ -99,15 +105,17 @@ const ALIASES: Record<string, RatingPreference> = {
   metacritic: 'metacritic',
   metacriticuser: 'metacriticuser',
   trakt: 'trakt',
+  simkl: 'simkl',
   rogerebert: 'rogerebert',
   myanimelist: 'myanimelist',
   mal: 'myanimelist',
   anilist: 'anilist',
+  anilistco: 'anilist',
   kitsu: 'kitsu',
 };
 
 export const normalizeRatingPreference = (value: string): RatingPreference | null => {
-  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const normalized = value.trim().toLowerCase().replace(/[\s._-]+/g, '');
   if (!normalized) return null;
   return ALIASES[normalized] || null;
 };

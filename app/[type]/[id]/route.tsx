@@ -98,7 +98,7 @@ const parseNonNegativeInt = (value?: string | null, max = Number.MAX_SAFE_INTEGE
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.min(max, Math.floor(parsed));
 };
-const FINAL_IMAGE_RENDERER_CACHE_VERSION = 'poster-backdrop-logo-v32';
+const FINAL_IMAGE_RENDERER_CACHE_VERSION = 'poster-backdrop-logo-v34';
 const TMDB_CACHE_TTL_MS = parseCacheTtlMs(
   process.env.ERDB_TMDB_CACHE_TTL_MS,
   3 * 24 * 60 * 60 * 1000,
@@ -140,6 +140,12 @@ const KITSU_CACHE_TTL_MS = parseCacheTtlMs(
   10 * 60 * 1000,
   30 * 24 * 60 * 60 * 1000
 );
+const SIMKL_CACHE_TTL_MS = parseCacheTtlMs(
+  process.env.ERDB_SIMKL_CACHE_TTL_MS,
+  3 * 24 * 60 * 60 * 1000,
+  10 * 60 * 1000,
+  30 * 24 * 60 * 60 * 1000
+);
 const TORRENTIO_CACHE_TTL_MS = parseCacheTtlMs(
   process.env.ERDB_TORRENTIO_CACHE_TTL_MS,
   6 * 60 * 60 * 1000,
@@ -160,6 +166,11 @@ const METADATA_CACHE_MAX_ENTRIES = 2000;
 const PROVIDER_ICON_CACHE_MAX_ENTRIES = 64;
 const TMDB_ANIMATION_GENRE_ID = 16;
 const MDBLIST_API_KEYS = parseApiKeyList(process.env.MDBLIST_API_KEYS, process.env.MDBLIST_API_KEY);
+const SIMKL_CLIENT_ID =
+  process.env.SIMKL_CLIENT_ID ||
+  process.env.SIMKL_API_KEY ||
+  process.env.ERDB_SIMKL_CLIENT_ID ||
+  '';
 type TimedCacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -335,11 +346,11 @@ const PERCENTAGE_RATING_PROVIDERS = new Set<RatingPreference>([
   'kitsu',
 ]);
 const ANIME_ONLY_RATING_PROVIDER_SET = new Set<RatingPreference>(['myanimelist', 'anilist', 'kitsu']);
-const ANIME_PRIORITY_RATING_PROVIDERS: RatingPreference[] = ['myanimelist', 'anilist', 'kitsu'];
 const SCALE_SUFFIX_RATING_PROVIDERS: Partial<Record<RatingPreference, string>> = {
   tmdb: '/10',
   imdb: '/10',
   metacriticuser: '/10',
+  simkl: '/10',
   letterboxd: '/5',
   myanimelist: '/10',
   rogerebert: '/4',
@@ -645,17 +656,6 @@ const formatDisplayRatingValue = (
   return baseValue;
 };
 
-const prioritizeAnimeRatingPreferences = (
-  preferences: RatingPreference[],
-  prioritizeAnimeRatings: boolean
-) => {
-  if (!prioritizeAnimeRatings) return preferences;
-
-  const prioritized = ANIME_PRIORITY_RATING_PROVIDERS.filter((provider) => preferences.includes(provider));
-  const remaining = preferences.filter((provider) => !ANIME_PRIORITY_RATING_PROVIDERS.includes(provider));
-  return [...prioritized, ...remaining];
-};
-
 const shouldRenderRatingValue = (value: string | null | undefined) => {
   if (!value) return false;
   const normalized = value.trim();
@@ -927,6 +927,82 @@ const fetchMdbListRatings = async ({
   return null;
 };
 
+const fetchSimklRating = async ({
+  clientId,
+  imdbId,
+  tmdbId,
+  mediaType,
+  anilistId,
+  malId,
+  kitsuId,
+  cacheTtlMs,
+  phases,
+}: {
+  clientId: string;
+  imdbId?: string | null;
+  tmdbId?: string | null;
+  mediaType: 'movie' | 'tv';
+  anilistId?: string | null;
+  malId?: string | null;
+  kitsuId?: string | null;
+  cacheTtlMs: number;
+  phases: PhaseDurations;
+}) => {
+  const normalizedClientId = String(clientId || '').trim();
+  const normalizedImdbId = String(imdbId || '').trim();
+  const normalizedTmdbId = String(tmdbId || '').trim();
+  const normalizedAnilistId = String(anilistId || '').trim();
+  const normalizedMalId = String(malId || '').trim();
+  const normalizedKitsuId = String(kitsuId || '').trim();
+
+  if (!normalizedClientId) return null;
+
+  const query = new URLSearchParams();
+  query.set('client_id', normalizedClientId);
+  query.set('fields', 'simkl');
+
+  if (normalizedImdbId) {
+    query.set('imdb', normalizedImdbId);
+  } else if (normalizedTmdbId) {
+    query.set('tmdb', normalizedTmdbId);
+    query.set('type', mediaType);
+  } else if (normalizedAnilistId) {
+    query.set('anilist', normalizedAnilistId);
+  } else if (normalizedMalId) {
+    query.set('mal', normalizedMalId);
+  } else if (normalizedKitsuId) {
+    query.set('kitsu', normalizedKitsuId);
+  } else {
+    return null;
+  }
+
+  const cacheIdSource =
+    normalizedImdbId ||
+    (normalizedTmdbId ? `tmdb:${mediaType}:${normalizedTmdbId}` : '') ||
+    (normalizedAnilistId ? `anilist:${normalizedAnilistId}` : '') ||
+    (normalizedMalId ? `mal:${normalizedMalId}` : '') ||
+    (normalizedKitsuId ? `kitsu:${normalizedKitsuId}` : '');
+
+  const response = await fetchJsonCached(
+    `simkl:ratings:${cacheIdSource}:client:${sha1Hex(normalizedClientId)}`,
+    `https://api.simkl.com/ratings?${query.toString()}`,
+    cacheTtlMs,
+    phases,
+    'mdb',
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'simkl-api-key': normalizedClientId,
+      },
+    }
+  );
+
+  if (!response.ok) return null;
+
+  const rating = normalizeRatingValue(response.data?.simkl?.rating);
+  return rating && !isNegativeRatingValue(rating) ? rating : null;
+};
+
 const normalizeKitsuId = (value: unknown) => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const asInt = Math.trunc(value);
@@ -973,6 +1049,85 @@ const extractKitsuIdFromAnimemapping = (payload: any) => {
   return null;
 };
 
+const normalizeNumericAnimeSiteId = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const asInt = Math.trunc(value);
+    return asInt > 0 ? String(asInt) : null;
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/\d+/);
+  return match ? match[0] : null;
+};
+
+const extractAnilistIdFromAnimemapping = (payload: any) => {
+  const candidates = [
+    payload?.mappings?.ids?.anilist,
+    payload?.data?.mappings?.ids?.anilist,
+    payload?.anilist?.id,
+    payload?.data?.anilist?.id,
+    payload?.ids?.anilist,
+  ];
+  for (const candidate of candidates) {
+    const id = normalizeNumericAnimeSiteId(candidate);
+    if (id) return id;
+  }
+  return null;
+};
+
+const extractMalIdFromAnimemapping = (payload: any) => {
+  const candidates = [
+    payload?.mappings?.ids?.mal,
+    payload?.mappings?.ids?.myanimelist,
+    payload?.data?.mappings?.ids?.mal,
+    payload?.data?.mappings?.ids?.myanimelist,
+    payload?.mal?.id,
+    payload?.data?.mal?.id,
+  ];
+  for (const candidate of candidates) {
+    const id = normalizeNumericAnimeSiteId(candidate);
+    if (id) return id;
+  }
+  return null;
+};
+
+const fetchAnimemappingPayload = async ({
+  provider,
+  externalId,
+  season,
+  phases,
+}: {
+  provider: AnimeMappingProvider;
+  externalId: string;
+  season?: string | number | null;
+  phases: PhaseDurations;
+}) => {
+  const normalizedExternalId = externalId.trim();
+  if (!normalizedExternalId) return null;
+
+  const normalizedSeason = String(season ?? '').trim();
+  const seasonQuery = normalizedSeason ? `?s=${encodeURIComponent(normalizedSeason)}` : '';
+  const cacheKey = `animemapping:${provider}:${normalizedExternalId}:s:${normalizedSeason || '-'}`;
+  const url = `https://animemapping.stremio.dpdns.org/${provider}/${encodeURIComponent(normalizedExternalId)}${seasonQuery}`;
+
+  try {
+    const response = await fetchJsonCached(
+      cacheKey,
+      url,
+      KITSU_CACHE_TTL_MS,
+      phases,
+      'tmdb'
+    );
+    if (!response.ok) return null;
+    const payload = response.data;
+    if (payload?.ok === false) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+};
+
 const extractTmdbIdFromAnimemapping = (payload: any) => {
   const candidates = [
     payload?.mappings?.ids?.tmdb,
@@ -1008,76 +1163,48 @@ const extractAnimeSubtypeFromAnimemapping = (payload: any) => {
   return null;
 };
 
-const fetchKitsuIdFromReverseMapping = async ({
-  provider,
-  externalId,
-  season,
-  phases,
-}: {
+const fetchKitsuIdFromReverseMapping = async (args: {
   provider: AnimeMappingProvider;
   externalId: string;
   season?: string | null;
   phases: PhaseDurations;
 }) => {
-  const normalizedExternalId = externalId.trim();
-  if (!normalizedExternalId) return null;
-
-  const normalizedSeason = (season || '').trim();
-  const seasonQuery = normalizedSeason ? `?s=${encodeURIComponent(normalizedSeason)}` : '';
-  const cacheKey = `kitsu:reverse:${provider}:${normalizedExternalId}:s:${normalizedSeason || '-'}`;
-  const url = `https://animemapping.stremio.dpdns.org/${provider}/${encodeURIComponent(normalizedExternalId)}${seasonQuery}`;
-
-  try {
-    const response = await fetchJsonCached(
-      cacheKey,
-      url,
-      KITSU_CACHE_TTL_MS,
-      phases,
-      'tmdb'
-    );
-    if (!response.ok) return null;
-    const payload = response.data;
-    if (payload?.ok === false) return null;
-    return extractKitsuIdFromAnimemapping(payload);
-  } catch {
-    return null;
-  }
+  const payload = await fetchAnimemappingPayload(args);
+  if (!payload) return null;
+  return extractKitsuIdFromAnimemapping(payload);
 };
 
-const fetchTmdbIdFromReverseMapping = async ({
-  provider,
-  externalId,
-  season,
-  phases,
-}: {
+const fetchTmdbIdFromReverseMapping = async (args: {
   provider: AnimeMappingProvider;
   externalId: string;
   season?: string | null;
   phases: PhaseDurations;
 }) => {
-  const normalizedExternalId = externalId.trim();
-  if (!normalizedExternalId) return null;
+  const payload = await fetchAnimemappingPayload(args);
+  if (!payload) return null;
+  return extractTmdbIdFromAnimemapping(payload);
+};
 
-  const normalizedSeason = (season || '').trim();
-  const seasonQuery = normalizedSeason ? `?s=${encodeURIComponent(normalizedSeason)}` : '';
-  const cacheKey = `tmdb:reverse:${provider}:${normalizedExternalId}:s:${normalizedSeason || '-'}`;
-  const url = `https://animemapping.stremio.dpdns.org/${provider}/${encodeURIComponent(normalizedExternalId)}${seasonQuery}`;
+const fetchAnilistIdFromReverseMapping = async (args: {
+  provider: AnimeMappingProvider;
+  externalId: string;
+  season?: string | null;
+  phases: PhaseDurations;
+}) => {
+  const payload = await fetchAnimemappingPayload(args);
+  if (!payload) return null;
+  return extractAnilistIdFromAnimemapping(payload);
+};
 
-  try {
-    const response = await fetchJsonCached(
-      cacheKey,
-      url,
-      KITSU_CACHE_TTL_MS,
-      phases,
-      'tmdb'
-    );
-    if (!response.ok) return null;
-    const payload = response.data;
-    if (payload?.ok === false) return null;
-    return extractTmdbIdFromAnimemapping(payload);
-  } catch {
-    return null;
-  }
+const fetchMalIdFromReverseMapping = async (args: {
+  provider: AnimeMappingProvider;
+  externalId: string;
+  season?: string | null;
+  phases: PhaseDurations;
+}) => {
+  const payload = await fetchAnimemappingPayload(args);
+  if (!payload) return null;
+  return extractMalIdFromAnimemapping(payload);
 };
 
 const fetchKitsuAnimeAttributes = async (kitsuId: string, phases: PhaseDurations) => {
@@ -1229,6 +1356,64 @@ const fetchKitsuFallbackAsset = async (
 const fetchKitsuRating = async (kitsuId: string, phases: PhaseDurations) => {
   const attributes = await fetchKitsuAnimeAttributes(kitsuId, phases);
   return normalizeRatingValue(attributes?.averageRating);
+};
+
+const ANILIST_GRAPHQL_URL = 'https://graphql.anilist.co';
+
+const fetchAnilistRating = async (anilistId: string, phases: PhaseDurations) => {
+  const normalized = normalizeNumericAnimeSiteId(anilistId);
+  if (!normalized) return null;
+  const numericId = Number(normalized);
+  if (!Number.isFinite(numericId) || numericId <= 0) return null;
+
+  const cacheKey = `anilist:media:${normalized}:mean`;
+  try {
+    const response = await fetchJsonCached(
+      cacheKey,
+      ANILIST_GRAPHQL_URL,
+      KITSU_CACHE_TTL_MS,
+      phases,
+      'mdb',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          query: 'query ($id: Int) { Media(id: $id) { averageScore } }',
+          variables: { id: Math.trunc(numericId) },
+        }),
+      }
+    );
+    if (!response.ok) return null;
+    const score = response.data?.data?.Media?.averageScore;
+    if (score == null || typeof score !== 'number' || !Number.isFinite(score) || score <= 0) return null;
+    return normalizeRatingValue(score);
+  } catch {
+    return null;
+  }
+};
+
+const fetchMyAnimeListRating = async (malId: string, phases: PhaseDurations) => {
+  const normalized = normalizeNumericAnimeSiteId(malId);
+  if (!normalized) return null;
+
+  try {
+    const response = await fetchJsonCached(
+      `jikan:anime:${normalized}:score`,
+      `https://api.jikan.moe/v4/anime/${encodeURIComponent(normalized)}`,
+      KITSU_CACHE_TTL_MS,
+      phases,
+      'mdb'
+    );
+    if (!response.ok) return null;
+    const score = response.data?.data?.score;
+    if (score == null || typeof score !== 'number' || !Number.isFinite(score) || score <= 0) return null;
+    return normalizeRatingValue(score);
+  } catch {
+    return null;
+  }
 };
 
 const fetchJsonCached = async (
@@ -1710,6 +1895,7 @@ const getProviderIconDataUri = async (iconUrl: string): Promise<string | null> =
       const sourceBuffer = Buffer.from(await response.arrayBuffer());
       const sharp = await getSharpFactory();
       const outputBuffer = await sharp(sourceBuffer)
+        .trim()
         .resize(96, 96, {
           fit: 'contain',
           background: { r: 0, g: 0, b: 0, alpha: 0 },
@@ -3381,6 +3567,10 @@ export async function GET(
       : DEFAULT_RATING_STYLE;
   const mdblistKey = request.nextUrl.searchParams.get('mdblistKey') || request.nextUrl.searchParams.get('mdblist_key');
   const tmdbKey = request.nextUrl.searchParams.get('tmdbKey') || request.nextUrl.searchParams.get('tmdb_key');
+  const simklClientId =
+    request.nextUrl.searchParams.get('simklClientId') ||
+    request.nextUrl.searchParams.get('simkl_client_id') ||
+    SIMKL_CLIENT_ID;
 
   const parts = cleanId.split(':');
   const idPrefix = (parts[0] || '').trim().toLowerCase();
@@ -3659,30 +3849,71 @@ export async function GET(
           phases,
         });
         if (!mappedTmdbId) {
-          throw new HttpError('TMDB ID not found for anime mapping ID', 404);
-        }
+          const kitsuId = await fetchKitsuIdFromReverseMapping({
+            provider: inputAnimeMappingProvider,
+            externalId: inputAnimeMappingExternalId,
+            season,
+            phases,
+          });
+          if (!kitsuId) {
+            throw new HttpError('TMDB ID not found for anime mapping ID', 404);
+          }
 
-        const tvResponse = await fetchJsonCached(
-          `tmdb:tv:${mappedTmdbId}`,
-          `https://api.themoviedb.org/3/tv/${mappedTmdbId}?api_key=${tmdbKey}`,
-          TMDB_CACHE_TTL_MS,
-          phases,
-          'tmdb'
-        );
-        if (tvResponse.ok) {
-          media = tvResponse.data;
-          mediaType = 'tv';
+          const kitsuFallbackAsset = await fetchKitsuFallbackAsset(kitsuId, imageType, phases);
+          rawFallbackImageUrl = kitsuFallbackAsset?.imageUrl || null;
+          rawFallbackKitsuRating = kitsuFallbackAsset?.rating || null;
+          rawFallbackTitle = kitsuFallbackAsset?.title || null;
+          rawFallbackLogoAspectRatio = kitsuFallbackAsset?.logoAspectRatio ?? null;
+          if (!rawFallbackImageUrl) {
+            throw new HttpError('TMDB ID not found for anime mapping ID', 404);
+          }
+          useRawKitsuFallback = true;
+          allowAnimeOnlyRatings = false;
+          hasConfirmedAnimeMapping = false;
         } else {
-          const movieResponse = await fetchJsonCached(
-            `tmdb:movie:${mappedTmdbId}`,
-            `https://api.themoviedb.org/3/movie/${mappedTmdbId}?api_key=${tmdbKey}`,
+          const tvResponse = await fetchJsonCached(
+            `tmdb:tv:${mappedTmdbId}`,
+            `https://api.themoviedb.org/3/tv/${mappedTmdbId}?api_key=${tmdbKey}`,
             TMDB_CACHE_TTL_MS,
             phases,
             'tmdb'
           );
-          if (movieResponse.ok) {
-            media = movieResponse.data;
-            mediaType = 'movie';
+          if (tvResponse.ok) {
+            media = tvResponse.data;
+            mediaType = 'tv';
+          } else {
+            const movieResponse = await fetchJsonCached(
+              `tmdb:movie:${mappedTmdbId}`,
+              `https://api.themoviedb.org/3/movie/${mappedTmdbId}?api_key=${tmdbKey}`,
+              TMDB_CACHE_TTL_MS,
+              phases,
+              'tmdb'
+            );
+            if (movieResponse.ok) {
+              media = movieResponse.data;
+              mediaType = 'movie';
+            }
+          }
+
+          if (!media) {
+            const kitsuId = await fetchKitsuIdFromReverseMapping({
+              provider: inputAnimeMappingProvider,
+              externalId: inputAnimeMappingExternalId,
+              season,
+              phases,
+            });
+            if (kitsuId) {
+              const kitsuFallbackAsset = await fetchKitsuFallbackAsset(kitsuId, imageType, phases);
+              rawFallbackImageUrl = kitsuFallbackAsset?.imageUrl || null;
+              rawFallbackKitsuRating = kitsuFallbackAsset?.rating || null;
+              rawFallbackTitle = kitsuFallbackAsset?.title || null;
+              rawFallbackLogoAspectRatio = kitsuFallbackAsset?.logoAspectRatio ?? null;
+              if (rawFallbackImageUrl) {
+                useRawKitsuFallback = true;
+                allowAnimeOnlyRatings = false;
+                hasConfirmedAnimeMapping = false;
+              }
+            }
           }
         }
       } else {
@@ -3834,14 +4065,22 @@ export async function GET(
           };
         })()
         : null;
+      const needsAnilistRating = requestedExternalRatings.has('anilist');
+      const needsMalRating = requestedExternalRatings.has('myanimelist');
       const providerRatingsPromise =
         shouldRenderRatings &&
           !useRawKitsuFallback &&
           needsExternalRatings &&
-          (mdblistKey || hasMdbListApiKey || needsKitsuRating || needsImdbRating)
+          (mdblistKey ||
+            hasMdbListApiKey ||
+            needsKitsuRating ||
+            needsImdbRating ||
+            needsAnimeOnlyRatings)
           ? (async () => {
             let imdbId: string | null = null;
             let kitsuId: string | null = isKitsu ? mediaId : null;
+            let anilistId: string | null = idPrefix === 'anilist' ? mediaId : null;
+            let malId: string | null = idPrefix === 'mal' ? mediaId : null;
             if (kitsuId) {
               hasConfirmedAnimeMapping = true;
               allowAnimeOnlyRatings = hasNativeAnimeInput || mediaLooksAnimated;
@@ -3857,7 +4096,7 @@ export async function GET(
             if (!imdbId && mappedImdbId) {
               imdbId = mappedImdbId;
             }
-            if (!imdbId && !kitsuId && !needsAnimeOnlyRatings) {
+            if (!imdbId && !kitsuId && !needsAnimeOnlyRatings && !anilistId && !malId) {
               return new Map<RatingPreference, string>();
             }
 
@@ -3892,6 +4131,67 @@ export async function GET(
               allowAnimeOnlyRatings = hasNativeAnimeInput || mediaLooksAnimated;
             }
 
+            if (needsAnimeOnlyRatings && shouldAttemptAnimeMapping) {
+              if (needsAnilistRating && !anilistId) {
+                if (inputAnimeMappingProvider && inputAnimeMappingExternalId) {
+                  anilistId = await fetchAnilistIdFromReverseMapping({
+                    provider: inputAnimeMappingProvider,
+                    externalId: inputAnimeMappingExternalId,
+                    season,
+                    phases,
+                  });
+                }
+                if (!anilistId && imdbId) {
+                  anilistId = await fetchAnilistIdFromReverseMapping({
+                    provider: 'imdb',
+                    externalId: imdbId,
+                    season,
+                    phases,
+                  });
+                }
+                if (!anilistId && media?.id) {
+                  anilistId = await fetchAnilistIdFromReverseMapping({
+                    provider: 'tmdb',
+                    externalId: String(media.id),
+                    season,
+                    phases,
+                  });
+                }
+              }
+              if (needsMalRating && !malId) {
+                if (inputAnimeMappingProvider && inputAnimeMappingExternalId) {
+                  malId = await fetchMalIdFromReverseMapping({
+                    provider: inputAnimeMappingProvider,
+                    externalId: inputAnimeMappingExternalId,
+                    season,
+                    phases,
+                  });
+                }
+                if (!malId && imdbId) {
+                  malId = await fetchMalIdFromReverseMapping({
+                    provider: 'imdb',
+                    externalId: imdbId,
+                    season,
+                    phases,
+                  });
+                }
+                if (!malId && media?.id) {
+                  malId = await fetchMalIdFromReverseMapping({
+                    provider: 'tmdb',
+                    externalId: String(media.id),
+                    season,
+                    phases,
+                  });
+                }
+              }
+            }
+            if (anilistId || malId) {
+              hasConfirmedAnimeMapping = true;
+              if (!hasNativeAnimeInput) {
+                allowAnimeOnlyRatings = hasConfirmedAnimeMapping && mediaLooksAnimated;
+              }
+            }
+
             const combinedRatings = new Map<RatingPreference, string>();
             const shortCircuitLimit =
               imageType === 'poster' ? getPosterRatingLayoutLimit(posterRatingsLayout) : null;
@@ -3901,6 +4201,9 @@ export async function GET(
               let mdbListCacheTtlMs: number | null = null;
               let hasFetchedMdb = false;
               let hasFetchedKitsu = false;
+              let hasFetchedAnilist = false;
+              let hasFetchedMal = false;
+              let hasFetchedSimkl = false;
 
               const ensureImdbId = async () => {
                 if (imdbId) return imdbId;
@@ -4028,6 +4331,104 @@ export async function GET(
                 return combinedRatings.get('kitsu') || null;
               };
 
+              const ensureAnilistRating = async () => {
+                if (hasFetchedAnilist || combinedRatings.has('anilist')) {
+                  return combinedRatings.get('anilist') || null;
+                }
+                hasFetchedAnilist = true;
+                if (!anilistId) return null;
+                try {
+                  const anilistCacheTtlMs = getRatingCacheTtlMs({
+                    id: anilistId,
+                    mediaType: mediaType as 'movie' | 'tv',
+                    releaseDate: mediaType === 'movie' ? media?.release_date : media?.first_air_date,
+                    defaultTtlMs: KITSU_CACHE_TTL_MS,
+                    oldTtlMs: MDBLIST_OLD_MOVIE_CACHE_TTL_MS,
+                  });
+                  const anilistRating = await fetchAnilistRating(anilistId, phases);
+                  if (anilistRating) {
+                    combinedRatings.set('anilist', anilistRating);
+                    renderedRatingTtlByProvider.set('anilist', anilistCacheTtlMs);
+                  }
+                } catch {
+                  // Ignore
+                }
+                return combinedRatings.get('anilist') || null;
+              };
+
+              const ensureMalRating = async () => {
+                if (hasFetchedMal || combinedRatings.has('myanimelist')) {
+                  return combinedRatings.get('myanimelist') || null;
+                }
+                hasFetchedMal = true;
+                if (!malId) return null;
+                try {
+                  const malCacheTtlMs = getRatingCacheTtlMs({
+                    id: malId,
+                    mediaType: mediaType as 'movie' | 'tv',
+                    releaseDate: mediaType === 'movie' ? media?.release_date : media?.first_air_date,
+                    defaultTtlMs: KITSU_CACHE_TTL_MS,
+                    oldTtlMs: MDBLIST_OLD_MOVIE_CACHE_TTL_MS,
+                  });
+                  const malRating = await fetchMyAnimeListRating(malId, phases);
+                  if (malRating) {
+                    combinedRatings.set('myanimelist', malRating);
+                    renderedRatingTtlByProvider.set('myanimelist', malCacheTtlMs);
+                  }
+                } catch {
+                  // Ignore
+                }
+                return combinedRatings.get('myanimelist') || null;
+              };
+
+              const ensureSimklRating = async () => {
+                if (hasFetchedSimkl || combinedRatings.has('simkl')) {
+                  return combinedRatings.get('simkl') || null;
+                }
+                hasFetchedSimkl = true;
+                if (!simklClientId) return null;
+                const resolvedImdbId = await ensureImdbId();
+                const tmdbId =
+                  media?.id != null
+                    ? String(media.id)
+                    : isTmdb && mediaId
+                      ? String(mediaId)
+                      : null;
+                try {
+                  const simklCacheTtlMs = getRatingCacheTtlMs({
+                    id:
+                      resolvedImdbId ||
+                      tmdbId ||
+                      anilistId ||
+                      malId ||
+                      kitsuId ||
+                      cleanId,
+                    mediaType: mediaType as 'movie' | 'tv',
+                    releaseDate: mediaType === 'movie' ? media?.release_date : media?.first_air_date,
+                    defaultTtlMs: SIMKL_CACHE_TTL_MS,
+                    oldTtlMs: MDBLIST_OLD_MOVIE_CACHE_TTL_MS,
+                  });
+                  const simklRating = await fetchSimklRating({
+                    clientId: simklClientId,
+                    imdbId: resolvedImdbId,
+                    tmdbId,
+                    mediaType: mediaType as 'movie' | 'tv',
+                    anilistId,
+                    malId,
+                    kitsuId,
+                    cacheTtlMs: simklCacheTtlMs,
+                    phases,
+                  });
+                  if (simklRating) {
+                    combinedRatings.set('simkl', simklRating);
+                    renderedRatingTtlByProvider.set('simkl', simklCacheTtlMs);
+                  }
+                } catch {
+                  // Ignore
+                }
+                return combinedRatings.get('simkl') || null;
+              };
+
               const resolveProvider = async (provider: RatingPreference) => {
                 if (provider === 'tmdb') return tmdbRating;
 
@@ -4051,26 +4452,42 @@ export async function GET(
                   return combinedRatings.get('kitsu') || null;
                 }
 
-                if (ANIME_ONLY_RATING_PROVIDER_SET.has(provider)) {
+                if (provider === 'anilist') {
                   if (!needsAnimeOnlyRatings) return null;
                   if (!allowAnimeOnlyRatings) {
                     await ensureAnimeMapping();
                   }
                   if (!allowAnimeOnlyRatings) return null;
+                  if (combinedRatings.has('anilist')) return combinedRatings.get('anilist') || null;
+                  const anilistRating = await ensureAnilistRating();
+                  if (anilistRating) return anilistRating;
                   await ensureMdbRatings();
-                  return combinedRatings.get(provider) || null;
+                  return combinedRatings.get('anilist') || null;
+                }
+
+                if (provider === 'myanimelist') {
+                  if (!needsAnimeOnlyRatings) return null;
+                  if (!allowAnimeOnlyRatings) {
+                    await ensureAnimeMapping();
+                  }
+                  if (!allowAnimeOnlyRatings) return null;
+                  if (combinedRatings.has('myanimelist')) return combinedRatings.get('myanimelist') || null;
+                  const malRating = await ensureMalRating();
+                  if (malRating) return malRating;
+                  await ensureMdbRatings();
+                  return combinedRatings.get('myanimelist') || null;
+                }
+
+                if (provider === 'simkl') {
+                  return ensureSimklRating();
                 }
 
                 await ensureMdbRatings();
                 return combinedRatings.get(provider) || null;
               };
 
-              const orderedEffectiveRatingPreferences = prioritizeAnimeRatingPreferences(
-                effectiveRatingPreferences,
-                allowAnimeOnlyRatings
-              );
               let renderableCount = 0;
-              for (const provider of orderedEffectiveRatingPreferences) {
+              for (const provider of effectiveRatingPreferences) {
                 if (renderableCount >= shortCircuitLimit) break;
                 const baseValue = await resolveProvider(provider);
                 if (!shouldRenderRatingValue(baseValue)) continue;
@@ -4137,6 +4554,79 @@ export async function GET(
                 if (kitsuRating) {
                   combinedRatings.set('kitsu', kitsuRating);
                   renderedRatingTtlByProvider.set('kitsu', kitsuCacheTtlMs);
+                }
+              } catch {
+                // Ignore
+              }
+            }
+
+            if (needsAnilistRating && allowAnimeOnlyRatings && anilistId && !combinedRatings.has('anilist')) {
+              try {
+                const anilistCacheTtlMs = getRatingCacheTtlMs({
+                  id: anilistId,
+                  mediaType: mediaType as 'movie' | 'tv',
+                  releaseDate: mediaType === 'movie' ? media?.release_date : media?.first_air_date,
+                  defaultTtlMs: KITSU_CACHE_TTL_MS,
+                  oldTtlMs: MDBLIST_OLD_MOVIE_CACHE_TTL_MS,
+                });
+                const anilistRating = await fetchAnilistRating(anilistId, phases);
+                if (anilistRating) {
+                  combinedRatings.set('anilist', anilistRating);
+                  renderedRatingTtlByProvider.set('anilist', anilistCacheTtlMs);
+                }
+              } catch {
+                // Ignore
+              }
+            }
+
+            if (needsMalRating && allowAnimeOnlyRatings && malId && !combinedRatings.has('myanimelist')) {
+              try {
+                const malCacheTtlMs = getRatingCacheTtlMs({
+                  id: malId,
+                  mediaType: mediaType as 'movie' | 'tv',
+                  releaseDate: mediaType === 'movie' ? media?.release_date : media?.first_air_date,
+                  defaultTtlMs: KITSU_CACHE_TTL_MS,
+                  oldTtlMs: MDBLIST_OLD_MOVIE_CACHE_TTL_MS,
+                });
+                const malRating = await fetchMyAnimeListRating(malId, phases);
+                if (malRating) {
+                  combinedRatings.set('myanimelist', malRating);
+                  renderedRatingTtlByProvider.set('myanimelist', malCacheTtlMs);
+                }
+              } catch {
+                // Ignore
+              }
+            }
+
+            if (requestedExternalRatings.has('simkl') && !combinedRatings.has('simkl') && simklClientId) {
+              try {
+                const tmdbId =
+                  media?.id != null
+                    ? String(media.id)
+                    : isTmdb && mediaId
+                      ? String(mediaId)
+                      : null;
+                const simklCacheTtlMs = getRatingCacheTtlMs({
+                  id: imdbId || tmdbId || anilistId || malId || kitsuId || cleanId,
+                  mediaType: mediaType as 'movie' | 'tv',
+                  releaseDate: mediaType === 'movie' ? media?.release_date : media?.first_air_date,
+                  defaultTtlMs: SIMKL_CACHE_TTL_MS,
+                  oldTtlMs: MDBLIST_OLD_MOVIE_CACHE_TTL_MS,
+                });
+                const simklRating = await fetchSimklRating({
+                  clientId: simklClientId,
+                  imdbId,
+                  tmdbId,
+                  mediaType: mediaType as 'movie' | 'tv',
+                  anilistId,
+                  malId,
+                  kitsuId,
+                  cacheTtlMs: simklCacheTtlMs,
+                  phases,
+                });
+                if (simklRating) {
+                  combinedRatings.set('simkl', simklRating);
+                  renderedRatingTtlByProvider.set('simkl', simklCacheTtlMs);
                 }
               } catch {
                 // Ignore
@@ -4449,11 +4939,8 @@ export async function GET(
       const ratingBadges: RatingBadge[] = [];
       const renderableRatingPreferences = useRawKitsuFallback
         ? (shouldRenderRawKitsuFallbackRating ? (['kitsu'] as RatingPreference[]) : [])
-        : prioritizeAnimeRatingPreferences(
-            effectiveRatingPreferences.filter(
-              (provider) => allowAnimeOnlyRatings || !ANIME_ONLY_RATING_PROVIDER_SET.has(provider)
-            ),
-            allowAnimeOnlyRatings
+        : effectiveRatingPreferences.filter(
+            (provider) => allowAnimeOnlyRatings || !ANIME_ONLY_RATING_PROVIDER_SET.has(provider)
           );
       for (const provider of renderableRatingPreferences) {
         const meta = RATING_PROVIDER_META.get(provider);

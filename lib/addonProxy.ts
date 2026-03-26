@@ -42,6 +42,7 @@ export const ERDB_RESERVED_PARAMS = new Set<string>([
   'url',
   'tmdbKey',
   'mdblistKey',
+  'simklClientId',
   'erdbBase',
   'translateMeta',
   'posterEnabled',
@@ -61,6 +62,7 @@ export type ProxyConfig = {
   url: string;
   tmdbKey: string;
   mdblistKey: string;
+  simklClientId?: string;
   translateMeta?: boolean;
   ratings?: string;
   posterRatings?: string;
@@ -96,6 +98,7 @@ const PROXY_OPTIONAL_STRING_KEYS = [
   'posterRatings',
   'backdropRatings',
   'logoRatings',
+  'simklClientId',
   'lang',
   'streamBadges',
   'posterStreamBadges',
@@ -127,7 +130,7 @@ const PROXY_OPTIONAL_BOOLEAN_KEYS = [
 ] as const satisfies readonly (keyof ProxyConfig)[];
 type ProxyOptionalBooleanKey = (typeof PROXY_OPTIONAL_BOOLEAN_KEYS)[number];
 
-const SUPPORTED_PREFIXES = new Set(['tmdb', 'kitsu', 'anilist', 'myanimelist']);
+const SUPPORTED_PREFIXES = new Set(['tmdb', 'kitsu', 'anilist', 'anidb', 'myanimelist', 'mal']);
 const IMDB_RE = /^tt\d+$/i;
 
 export const buildProxyId = (manifestUrl: string, configSeed?: string) => {
@@ -196,6 +199,9 @@ export const normalizeErdbId = (
   }
 
   if (SUPPORTED_PREFIXES.has(prefix) && parts.length >= 2 && parts[1]) {
+    if (prefix === 'mal' || prefix === 'myanimelist') {
+      return `mal:${parts[1]}`;
+    }
     return `${prefix}:${parts[1]}`;
   }
 
@@ -312,15 +318,19 @@ export const buildErdbImageUrl = (options: {
   erdbId: string;
   tmdbKey: string;
   mdblistKey: string;
+  simklClientId?: string;
   config?: ProxyConfig | null;
 }) => {
-  const { reqUrl, imageType, erdbId, tmdbKey, mdblistKey, config = null } = options;
+  const { reqUrl, imageType, erdbId, tmdbKey, mdblistKey, simklClientId, config = null } = options;
   const baseOverride = getProxyParam(reqUrl, config, 'erdbBase');
   const base = new URL(baseOverride || reqUrl.origin);
   base.pathname = `/${imageType}/${encodeURIComponent(erdbId)}.jpg`;
   base.search = '';
   base.searchParams.set('tmdbKey', tmdbKey);
   base.searchParams.set('mdblistKey', mdblistKey);
+  if (simklClientId) {
+    base.searchParams.set('simklClientId', simklClientId);
+  }
 
   for (const key of ERDB_OPTIONAL_PARAMS) {
     const value = getProxyParam(reqUrl, config, key as keyof ProxyConfig);

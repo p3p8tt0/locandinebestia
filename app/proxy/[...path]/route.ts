@@ -48,12 +48,57 @@ const normalizeStremioType = (value: unknown): 'movie' | 'tv' | null => {
   return null;
 };
 
+const fetchAnimemappingJson = async (url: string) => {
+  return fetchTmdbJson(url); // Reuse the same simple fetch mechanism
+};
+
+const extractTmdbIdFromAnimemapping = (payload: any) => {
+  const candidates = [
+    payload?.mappings?.ids?.tmdb,
+    payload?.data?.mappings?.ids?.tmdb,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return String(candidate);
+    }
+    if (typeof candidate === 'string') {
+      const match = candidate.match(/\d+/);
+      if (match) return match[0];
+    }
+  }
+
+  return null;
+};
+
+const resolveAnimeToTmdb = async (
+  provider: string,
+  externalId: string,
+) => {
+  const url = `https://animemapping.stremio.dpdns.org/${provider}/${encodeURIComponent(externalId)}?ep=1`;
+  const data = await fetchAnimemappingJson(url);
+  if (!data) return null;
+  
+  const tmdbId = extractTmdbIdFromAnimemapping(data);
+  if (!tmdbId) return null;
+
+  const seasonValue = data?.mappings?.tmdb_episode?.season || data?.data?.mappings?.tmdb_episode?.season;
+  const season = typeof seasonValue === 'number' ? seasonValue : typeof seasonValue === 'string' ? parseInt(seasonValue, 10) : null;
+
+  // Most anime are series/tv, but movies should be handled too.
+  // The animemapping response usually contains subtype info.
+  const subtype = (data?.requested?.subtype || data?.subtype || data?.kitsu?.subtype || '').toLowerCase();
+  const type: 'movie' | 'tv' = (subtype === 'movie' || subtype === 'special') ? 'movie' : 'tv';
+
+  return { id: Number(tmdbId), type, season: Number.isFinite(season) ? (season as number) : null, isAnime: true };
+};
+
 const resolveTmdbFromErdbId = async (
   erdbId: string,
   metaType: unknown,
   tmdbKey: string,
   lang: string | null,
-) => {
+): Promise<{ id: number; type: 'movie' | 'tv'; season?: number | null; isAnime?: boolean } | null> => {
   if (!erdbId) return null;
   const stremioType = normalizeStremioType(metaType);
 
@@ -99,6 +144,18 @@ const resolveTmdbFromErdbId = async (
     }
     if (tvResults[0]?.id) {
       return { id: Number(tvResults[0].id), type: 'tv' };
+    }
+  }
+
+  // Handle anime site IDs
+  const animePrefixes = ['kitsu', 'anilist', 'mal', 'myanimelist', 'anidb'];
+  for (const prefix of animePrefixes) {
+    if (erdbId.startsWith(`${prefix}:`)) {
+      const externalId = erdbId.split(':')[1];
+      if (externalId) {
+        const provider = prefix === 'myanimelist' ? 'mal' : prefix;
+        return resolveAnimeToTmdb(provider, externalId);
+      }
     }
   }
 
@@ -189,16 +246,35 @@ const translateMetaPayload = async (
   const details = await fetchTmdbJson(detailsUrl.toString());
   if (!details || typeof details !== 'object') return meta;
 
-  const translatedTitle =
-    typeof details.title === 'string'
-      ? details.title
-      : typeof details.name === 'string'
-        ? details.name
-        : null;
-  const translatedOverview = typeof details.overview === 'string' ? details.overview : null;
+  let translatedOverview = typeof details.overview === 'string' ? details.overview : null;
+
+  // For non-anime content, also translate titles
+  let translatedTitle: string | null = null;
+  if (!tmdbRef.isAnime) {
+    translatedTitle =
+      typeof details.title === 'string'
+        ? details.title
+        : typeof details.name === 'string'
+          ? details.name
+          : null;
+  }
+
+  // Use season-specific metadata if available for anime seasons
+  if (tmdbRef.type === 'tv' && typeof tmdbRef.season === 'number' && tmdbRef.season > 0) {
+    const seasonUrl = new URL(`${TMDB_BASE_URL}/tv/${tmdbRef.id}/season/${tmdbRef.season}`);
+    seasonUrl.searchParams.set('api_key', config.tmdbKey);
+    seasonUrl.searchParams.set('language', lang);
+    const seasonDetails = await fetchTmdbJson(seasonUrl.toString());
+    if (seasonDetails && typeof seasonDetails === 'object') {
+      const seasonOverview = typeof seasonDetails.overview === 'string' ? seasonDetails.overview : null;
+      if (seasonOverview) {
+        translatedOverview = seasonOverview;
+      }
+    }
+  }
 
   const nextMeta: Record<string, unknown> = { ...meta };
-  translateTextFields(nextMeta, translatedTitle, translatedOverview);
+  translateTextFields(nextMeta, null, translatedOverview);
 
   if (tmdbRef.type === 'tv' && Array.isArray(nextMeta.videos) && nextMeta.videos.length > 0) {
     const videos = nextMeta.videos as Array<Record<string, unknown>>;
@@ -279,6 +355,7 @@ const rewriteMetaImages = (
       erdbId,
       tmdbKey: config.tmdbKey,
       mdblistKey: config.mdblistKey,
+      simklClientId: config.simklClientId,
       config,
     });
   }
@@ -290,6 +367,7 @@ const rewriteMetaImages = (
       erdbId,
       tmdbKey: config.tmdbKey,
       mdblistKey: config.mdblistKey,
+      simklClientId: config.simklClientId,
       config,
     });
   }
@@ -301,6 +379,7 @@ const rewriteMetaImages = (
       erdbId,
       tmdbKey: config.tmdbKey,
       mdblistKey: config.mdblistKey,
+      simklClientId: config.simklClientId,
       config,
     });
   }
