@@ -49,6 +49,7 @@ type SupportedLanguage = {
 type StreamBadgesSetting = 'auto' | 'on' | 'off';
 type QualityBadgesSide = 'left' | 'right';
 type PosterQualityBadgesPosition = 'auto' | QualityBadgesSide;
+type AiometadataPatternType = 'poster' | 'background' | 'logo' | 'episodeThumbnail';
 
 type HomePageViewState = {
   previewType: PreviewType;
@@ -72,6 +73,7 @@ type HomePageViewState = {
   configCopied: boolean;
   proxyCopied: boolean;
   copied: boolean;
+  aiometadataCopiedType: AiometadataPatternType | null;
 };
 
 type HomePageViewDerived = {
@@ -95,6 +97,7 @@ type HomePageViewDerived = {
   qualityBadgeTypeLabel: string;
   activeStreamBadges: StreamBadgesSetting;
   activeQualityBadgesStyle: RatingStyle;
+  aiometadataPatterns: Record<AiometadataPatternType, string>;
 };
 
 type HomePageViewActions = {
@@ -104,6 +107,7 @@ type HomePageViewActions = {
   handleCopyConfig: () => void;
   handleCopyProxy: () => void;
   handleCopyPrompt: () => void;
+  handleCopyAiometadataPattern: (type: AiometadataPatternType) => void;
   setPreviewType: Dispatch<SetStateAction<PreviewType>>;
   setMediaId: Dispatch<SetStateAction<string>>;
   setLang: Dispatch<SetStateAction<string>>;
@@ -180,6 +184,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     configCopied,
     proxyCopied,
     copied,
+    aiometadataCopiedType,
   } = state;
   const {
     baseUrl,
@@ -202,6 +207,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     qualityBadgeTypeLabel,
     activeStreamBadges,
     activeQualityBadgesStyle,
+    aiometadataPatterns,
   } = derived;
   const {
     handleAnchorClick,
@@ -210,6 +216,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     handleCopyConfig,
     handleCopyProxy,
     handleCopyPrompt,
+    handleCopyAiometadataPattern,
     setPreviewType,
     setMediaId,
     setLang,
@@ -578,16 +585,14 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block">
                     {providersLabel} — drag the grip to reorder (left → right / top → bottom)
                   </span>
-                  {previewType === 'poster' ? (
-                    <span className="block text-[10px] text-slate-500/80">
-                      Order flows top -&gt; bottom, then continues in the right column.
-                    </span>
-                  ) : null}
+                  <span className="block text-[10px] text-slate-500/80">
+                    Order flows top -&gt; bottom, then continues in the right column.
+                  </span>
                   <RatingProviderSortableList
                     rows={ratingProviderRows}
                     onReorder={reorderRatingPreference}
                     onToggle={toggleRatingPreference}
-                    fillDirection={previewType === 'poster' ? 'column' : 'row'}
+                    fillDirection="column"
                   />
                 </div>
               </div>
@@ -675,6 +680,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                 )}
 
               </div>
+
             </div>
 
             <div className="min-w-0 w-full flex flex-col h-full gap-3">
@@ -790,6 +796,58 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
               </div>
             </div>
 
+          </div>
+
+          <div className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4 backdrop-blur-xl shadow-[0_25px_70px_-70px_rgba(0,0,0,0.8)]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-[var(--font-display)] text-white flex items-center gap-2">
+                <Terminal className="w-5 h-5 text-orange-500" /> Aiometadata Patterns
+              </h3>
+            </div>
+            <p className="mt-2 text-sm text-slate-400 max-w-3xl">
+              Copy these URL patterns directly into aiometadata. These patterns use direct ERDB image URLs with <code>{'{imdb_id}'}</code>, which is the format currently confirmed to be accepted by aiometadata.
+            </p>
+            <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
+              {([
+                ['poster', 'Poster URL Pattern'],
+                ['background', 'Background URL Pattern'],
+                ['logo', 'Logo URL Pattern'],
+                ['episodeThumbnail', 'Episode Thumbnail URL Pattern'],
+              ] as Array<[AiometadataPatternType, string]>).map(([type, label]) => {
+                const value = aiometadataPatterns[type];
+                const isCopied = aiometadataCopiedType === type;
+                const isAvailable = Boolean(value);
+                return (
+                  <div key={type} className="rounded-2xl border border-white/10 bg-[#080b10]/90 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-[11px] font-semibold text-slate-400">{label}</div>
+                      <button
+                        onClick={() => handleCopyAiometadataPattern(type)}
+                        disabled={!isAvailable}
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition-all ${isAvailable ? (isCopied ? 'bg-green-500 text-white' : 'bg-orange-500 text-black hover:bg-orange-400') : 'bg-[#141b26] text-slate-500 cursor-not-allowed'}`}
+                      >
+                        {isCopied ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>COPIED</span>
+                          </>
+                        ) : (
+                          <>
+                            <Clipboard className="w-3.5 h-3.5" />
+                            <span>COPY</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="mt-2 rounded-xl border border-white/10 bg-[#0b0f15]/80 p-3 min-h-28">
+                      <div className="font-mono text-xs text-slate-300 break-all whitespace-pre-wrap">
+                        {value || 'Not available. ERDB currently does not expose a dedicated episode thumbnail endpoint.'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </section>
 

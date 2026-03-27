@@ -56,6 +56,7 @@ const VISIBLE_RATING_PROVIDER_OPTIONS = RATING_PROVIDER_OPTIONS;
 const PROXY_TYPES = ['poster', 'backdrop', 'logo'] as const;
 type ProxyType = (typeof PROXY_TYPES)[number];
 type ProxyEnabledTypes = Record<ProxyType, boolean>;
+type AiometadataPatternType = 'poster' | 'background' | 'logo' | 'episodeThumbnail';
 type StreamBadgesSetting = 'auto' | 'on' | 'off';
 type QualityBadgesSide = 'left' | 'right';
 type PosterQualityBadgesPosition = 'auto' | QualityBadgesSide;
@@ -175,6 +176,200 @@ const decodeBase64Url = (value: string) => {
   return new TextDecoder().decode(bytes);
 };
 
+const buildAiometadataPattern = (options: {
+  baseUrl: string;
+  imageType: 'poster' | 'backdrop' | 'logo';
+  idPlaceholder: string;
+  tmdbKey: string;
+  mdblistKey: string;
+  simklClientId: string;
+  lang: string;
+  posterRatings: string;
+  backdropRatings: string;
+  logoRatings: string;
+  posterStreamBadges: StreamBadgesSetting;
+  backdropStreamBadges: StreamBadgesSetting;
+  shouldShowPosterQualityBadgesSide: boolean;
+  shouldShowPosterQualityBadgesPosition: boolean;
+  qualityBadgesSide: QualityBadgesSide;
+  posterQualityBadgesPosition: PosterQualityBadgesPosition;
+  posterQualityBadgesStyle: RatingStyle;
+  backdropQualityBadgesStyle: RatingStyle;
+  posterRatingStyle: RatingStyle;
+  backdropRatingStyle: RatingStyle;
+  logoRatingStyle: RatingStyle;
+  posterImageText: 'original' | 'clean' | 'alternative';
+  backdropImageText: 'original' | 'clean' | 'alternative';
+  posterRatingsLayout: PosterRatingLayout;
+  posterRatingsMaxPerSide: number | null;
+  backdropRatingsLayout: BackdropRatingLayout;
+}) => {
+  const {
+    baseUrl,
+    imageType,
+    idPlaceholder,
+    tmdbKey,
+    mdblistKey,
+    simklClientId,
+    lang,
+    posterRatings,
+    backdropRatings,
+    logoRatings,
+    posterStreamBadges,
+    backdropStreamBadges,
+    shouldShowPosterQualityBadgesSide,
+    shouldShowPosterQualityBadgesPosition,
+    qualityBadgesSide,
+    posterQualityBadgesPosition,
+    posterQualityBadgesStyle,
+    backdropQualityBadgesStyle,
+    posterRatingStyle,
+    backdropRatingStyle,
+    logoRatingStyle,
+    posterImageText,
+    backdropImageText,
+    posterRatingsLayout,
+    posterRatingsMaxPerSide,
+    backdropRatingsLayout,
+  } = options;
+
+  if (!baseUrl || !tmdbKey || !mdblistKey) {
+    return '';
+  }
+
+  const params: Array<[string, string]> = [
+    ['tmdbKey', tmdbKey || '{tmdb_key}'],
+    ['mdblistKey', mdblistKey || '{mdblist_key}'],
+    ['lang', '{language_short}'],
+  ];
+
+  if (simklClientId) {
+    params.push(['simklClientId', simklClientId]);
+  }
+
+  if (imageType === 'poster') {
+    params.push(['posterRatings', posterRatings]);
+    if (posterStreamBadges !== 'auto') {
+      params.push(['posterStreamBadges', posterStreamBadges]);
+    }
+    if (shouldShowPosterQualityBadgesSide && qualityBadgesSide !== 'left') {
+      params.push(['qualityBadgesSide', qualityBadgesSide]);
+    }
+    if (shouldShowPosterQualityBadgesPosition && posterQualityBadgesPosition !== 'auto') {
+      params.push(['posterQualityBadgesPosition', posterQualityBadgesPosition]);
+    }
+    if (posterQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['posterQualityBadgesStyle', posterQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', posterRatingStyle]);
+    params.push(['imageText', posterImageText]);
+    params.push(['posterRatingsLayout', posterRatingsLayout]);
+    if (isVerticalPosterRatingLayout(posterRatingsLayout) && posterRatingsMaxPerSide !== null) {
+      params.push(['posterRatingsMaxPerSide', String(posterRatingsMaxPerSide)]);
+    }
+  } else if (imageType === 'backdrop') {
+    params.push(['backdropRatings', backdropRatings]);
+    if (backdropStreamBadges !== 'auto') {
+      params.push(['backdropStreamBadges', backdropStreamBadges]);
+    }
+    if (backdropQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['backdropQualityBadgesStyle', backdropQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', backdropRatingStyle]);
+    params.push(['imageText', backdropImageText]);
+    params.push(['backdropRatingsLayout', backdropRatingsLayout]);
+  } else {
+    params.push(['logoRatings', logoRatings]);
+    params.push(['ratingStyle', logoRatingStyle]);
+  }
+
+  const query = params
+    .filter(([, value]) => value !== '')
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+
+  return `${baseUrl}/${imageType}/${idPlaceholder}.jpg?${query}`;
+};
+
+const buildAiometadataPatternBlock = (options: {
+  baseUrl: string;
+  imageType: 'poster' | 'backdrop' | 'logo';
+  configString: string;
+}) => {
+  if (!options.baseUrl || !options.configString) {
+    return '';
+  }
+
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(decodeBase64Url(options.configString)) as Record<string, unknown>;
+  } catch {
+    return '';
+  }
+
+  const params: Array<[string, string]> = [];
+
+  const pushIfString = (key: string) => {
+    const value = config[key];
+    if (typeof value === 'string' && value !== '') {
+      params.push([key, value]);
+    }
+  };
+
+  pushIfString('tmdbKey');
+  pushIfString('mdblistKey');
+  pushIfString('simklClientId');
+  pushIfString('lang');
+  pushIfString('ratings');
+  pushIfString('qualityBadgesSide');
+  pushIfString('posterQualityBadgesPosition');
+  pushIfString('qualityBadgesStyle');
+  pushIfString('posterQualityBadgesStyle');
+  pushIfString('backdropQualityBadgesStyle');
+  pushIfString('streamBadges');
+  pushIfString('posterStreamBadges');
+  pushIfString('backdropStreamBadges');
+
+  if (options.imageType === 'poster') {
+    pushIfString('posterRatings');
+    if (typeof config.posterRatingStyle === 'string' && config.posterRatingStyle !== '') {
+      params.push(['ratingStyle', config.posterRatingStyle]);
+    }
+    if (typeof config.posterImageText === 'string' && config.posterImageText !== '') {
+      params.push(['imageText', config.posterImageText]);
+    }
+    pushIfString('posterRatingsLayout');
+    if (
+      typeof config.posterRatingsMaxPerSide === 'string' ||
+      typeof config.posterRatingsMaxPerSide === 'number'
+    ) {
+      params.push(['posterRatingsMaxPerSide', String(config.posterRatingsMaxPerSide)]);
+    }
+  } else if (options.imageType === 'backdrop') {
+    pushIfString('backdropRatings');
+    if (typeof config.backdropRatingStyle === 'string' && config.backdropRatingStyle !== '') {
+      params.push(['ratingStyle', config.backdropRatingStyle]);
+    }
+    if (typeof config.backdropImageText === 'string' && config.backdropImageText !== '') {
+      params.push(['imageText', config.backdropImageText]);
+    }
+    pushIfString('backdropRatingsLayout');
+  } else {
+    pushIfString('logoRatings');
+    if (typeof config.logoRatingStyle === 'string' && config.logoRatingStyle !== '') {
+      params.push(['ratingStyle', config.logoRatingStyle]);
+    }
+  }
+
+  const query = params
+    .filter(([, value]) => value !== '')
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+
+  const basePattern = `${options.baseUrl}/${options.imageType}/{imdb_id}.jpg`;
+  return query ? `${basePattern}?${query}` : basePattern;
+};
+
 const downloadJsonFile = (payload: Record<string, unknown>, filename: string) => {
   if (typeof window === 'undefined') return;
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -229,6 +424,7 @@ export default function Home() {
   const [configCopied, setConfigCopied] = useState(false);
   const [showConfigString, setShowConfigString] = useState(false);
   const [showProxyUrl, setShowProxyUrl] = useState(false);
+  const [aiometadataCopiedType, setAiometadataCopiedType] = useState<AiometadataPatternType | null>(null);
   const [exportStatus, setExportStatus] = useState<'idle' | 'with' | 'without'>('idle');
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
@@ -734,6 +930,30 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     baseUrl,
   ]);
 
+  const aiometadataPatterns = useMemo(() => {
+    return {
+      poster: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'poster',
+        configString,
+      }),
+      background: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'backdrop',
+        configString,
+      }),
+      logo: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'logo',
+        configString,
+      }),
+      episodeThumbnail: '',
+    };
+  }, [
+    baseUrl,
+    configString,
+  ]);
+
   const updateRatingRowsForType = (
     type: 'poster' | 'backdrop' | 'logo',
     updater: (current: RatingProviderRow[]) => RatingProviderRow[]
@@ -793,6 +1013,14 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     setProxyCopied(true);
     setTimeout(() => setProxyCopied(false), 2000);
   }, [proxyUrl]);
+
+  const handleCopyAiometadataPattern = useCallback((type: AiometadataPatternType) => {
+    const value = aiometadataPatterns[type];
+    if (!value) return;
+    navigator.clipboard.writeText(value);
+    setAiometadataCopiedType(type);
+    setTimeout(() => setAiometadataCopiedType((current) => (current === type ? null : current)), 2000);
+  }, [aiometadataPatterns]);
 
   const handleExportConfig = (includeKeys: boolean) => {
     const payload: Record<string, unknown> = {
@@ -1081,6 +1309,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       configCopied,
       proxyCopied,
       copied,
+      aiometadataCopiedType,
     },
     derived: {
       baseUrl,
@@ -1103,6 +1332,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       qualityBadgeTypeLabel,
       activeStreamBadges,
       activeQualityBadgesStyle,
+      aiometadataPatterns,
     },
     actions: {
       handleAnchorClick,
@@ -1111,6 +1341,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       handleCopyConfig,
       handleCopyProxy,
       handleCopyPrompt,
+      handleCopyAiometadataPattern,
       setPreviewType,
       setMediaId,
       setLang,
