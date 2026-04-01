@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  normalizeProxyCatalogBooleanOverrides,
+  normalizeProxyCatalogKeyList,
+  normalizeProxyCatalogNameOverrides,
+} from '@/lib/proxyCatalog';
 
 const ERDB_OPTIONAL_PARAMS = [
   'ratings',
@@ -10,16 +15,24 @@ const ERDB_OPTIONAL_PARAMS = [
   'posterRatingsLayout',
   'posterRatingsMaxPerSide',
   'backdropRatingsLayout',
+  'thumbnailRatingsLayout',
+  'posterVerticalBadgeContent',
+  'backdropVerticalBadgeContent',
+  'thumbnailVerticalBadgeContent',
+  'thumbnailSize',
+  'aiometadataProvider',
 ];
 const ERDB_TYPE_OPTIONAL_PARAMS = {
   poster: ['posterStreamBadges', 'posterQualityBadgesStyle', 'posterRatings'],
   backdrop: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'backdropRatings'],
-  logo: ['logoRatings'],
+  logo: ['logoRatings', 'logoRatingsMax'],
+  thumbnail: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'thumbnailRatings'],
 } as const;
 const ERDB_OPTIONAL_PARAM_KEYS = [
   ...ERDB_OPTIONAL_PARAMS,
   ...ERDB_TYPE_OPTIONAL_PARAMS.poster,
   ...ERDB_TYPE_OPTIONAL_PARAMS.backdrop,
+  ...ERDB_TYPE_OPTIONAL_PARAMS.thumbnail,
   ...ERDB_TYPE_OPTIONAL_PARAMS.logo,
 ];
 
@@ -36,6 +49,10 @@ const ERDB_TYPE_STYLE_PARAMS = {
     ratingStyle: ['logoRatingStyle', 'ratingStyle'],
     imageText: [],
   },
+  thumbnail: {
+    ratingStyle: ['backdropRatingStyle', 'ratingStyle'],
+    imageText: ['backdropImageText', 'imageText'],
+  },
 } as const;
 
 export const ERDB_RESERVED_PARAMS = new Set<string>([
@@ -44,10 +61,16 @@ export const ERDB_RESERVED_PARAMS = new Set<string>([
   'mdblistKey',
   'simklClientId',
   'erdbBase',
+  'seriesMetadataProvider',
   'translateMeta',
   'posterEnabled',
   'backdropEnabled',
   'logoEnabled',
+  'thumbnailEnabled',
+  'catalogNames',
+  'hiddenCatalogs',
+  'searchDisabledCatalogs',
+  'discoverOnlyCatalogs',
   'ratingStyle',
   'imageText',
   'posterRatingStyle',
@@ -67,7 +90,9 @@ export type ProxyConfig = {
   ratings?: string;
   posterRatings?: string;
   backdropRatings?: string;
+  thumbnailRatings?: string;
   logoRatings?: string;
+  logoRatingsMax?: string;
   lang?: string;
   streamBadges?: string;
   posterStreamBadges?: string;
@@ -87,17 +112,31 @@ export type ProxyConfig = {
   posterRatingsLayout?: string;
   posterRatingsMaxPerSide?: string;
   backdropRatingsLayout?: string;
+  thumbnailRatingsLayout?: string;
+  posterVerticalBadgeContent?: string;
+  backdropVerticalBadgeContent?: string;
+  thumbnailVerticalBadgeContent?: string;
+  thumbnailSize?: string;
+  seriesMetadataProvider?: string;
+  aiometadataProvider?: string;
   erdbBase?: string;
   posterEnabled?: boolean;
   backdropEnabled?: boolean;
   logoEnabled?: boolean;
+  thumbnailEnabled?: boolean;
+  catalogNames?: Record<string, string>;
+  hiddenCatalogs?: string[];
+  searchDisabledCatalogs?: string[];
+  discoverOnlyCatalogs?: Record<string, boolean>;
 };
 
 const PROXY_OPTIONAL_STRING_KEYS = [
   'ratings',
   'posterRatings',
   'backdropRatings',
+  'thumbnailRatings',
   'logoRatings',
+  'logoRatingsMax',
   'simklClientId',
   'lang',
   'streamBadges',
@@ -118,6 +157,13 @@ const PROXY_OPTIONAL_STRING_KEYS = [
   'posterRatingsLayout',
   'posterRatingsMaxPerSide',
   'backdropRatingsLayout',
+  'thumbnailRatingsLayout',
+  'posterVerticalBadgeContent',
+  'backdropVerticalBadgeContent',
+  'thumbnailVerticalBadgeContent',
+  'thumbnailSize',
+  'seriesMetadataProvider',
+  'aiometadataProvider',
   'erdbBase',
  ] as const satisfies readonly (keyof ProxyConfig)[];
 type ProxyOptionalStringKey = (typeof PROXY_OPTIONAL_STRING_KEYS)[number];
@@ -127,10 +173,11 @@ const PROXY_OPTIONAL_BOOLEAN_KEYS = [
   'posterEnabled',
   'backdropEnabled',
   'logoEnabled',
+  'thumbnailEnabled',
 ] as const satisfies readonly (keyof ProxyConfig)[];
 type ProxyOptionalBooleanKey = (typeof PROXY_OPTIONAL_BOOLEAN_KEYS)[number];
 
-const SUPPORTED_PREFIXES = new Set(['tmdb', 'kitsu', 'anilist', 'anidb', 'myanimelist', 'mal']);
+const SUPPORTED_PREFIXES = new Set(['tmdb', 'tvdb', 'realimdb', 'kitsu', 'anilist', 'anidb', 'myanimelist', 'mal']);
 const IMDB_RE = /^tt\d+$/i;
 
 export const buildProxyId = (manifestUrl: string, configSeed?: string) => {
@@ -185,8 +232,13 @@ export const normalizeErdbId = (
 
   if (prefix === 'tmdb') {
     const explicitTypeCandidate = (parts[1] || '').trim().toLowerCase();
-    if ((explicitTypeCandidate === 'movie' || explicitTypeCandidate === 'tv') && parts.length >= 3 && parts[2]) {
-      return `tmdb:${explicitTypeCandidate}:${parts[2]}`;
+    if (
+      (explicitTypeCandidate === 'movie' || explicitTypeCandidate === 'tv' || explicitTypeCandidate === 'series') &&
+      parts.length >= 3 &&
+      parts[2]
+    ) {
+      const normalizedType = explicitTypeCandidate === 'series' ? 'tv' : explicitTypeCandidate;
+      return `tmdb:${normalizedType}:${parts[2]}`;
     }
 
     if (parts.length >= 2 && parts[1]) {
@@ -196,6 +248,14 @@ export const normalizeErdbId = (
       }
       return `tmdb:${parts[1]}`;
     }
+  }
+
+  if (prefix === 'tvdb' && parts.length >= 2 && parts[1]) {
+    return `tvdb:${parts[1]}`;
+  }
+
+  if (prefix === 'realimdb' && parts.length >= 2 && parts[1]) {
+    return `realimdb:${parts[1]}`;
   }
 
   if (SUPPORTED_PREFIXES.has(prefix) && parts.length >= 2 && parts[1]) {
@@ -275,6 +335,26 @@ export const decodeProxyConfig = (encoded: string): ProxyConfig | null => {
         config[key] = value;
       }
     }
+    const catalogNames = normalizeProxyCatalogNameOverrides((parsed as ProxyConfig).catalogNames);
+    if (catalogNames) {
+      config.catalogNames = catalogNames;
+    }
+    const hiddenCatalogs = normalizeProxyCatalogKeyList((parsed as ProxyConfig).hiddenCatalogs);
+    if (hiddenCatalogs) {
+      config.hiddenCatalogs = hiddenCatalogs;
+    }
+    const searchDisabledCatalogs = normalizeProxyCatalogKeyList(
+      (parsed as ProxyConfig).searchDisabledCatalogs
+    );
+    if (searchDisabledCatalogs) {
+      config.searchDisabledCatalogs = searchDisabledCatalogs;
+    }
+    const discoverOnlyCatalogs = normalizeProxyCatalogBooleanOverrides(
+      (parsed as ProxyConfig).discoverOnlyCatalogs
+    );
+    if (discoverOnlyCatalogs) {
+      config.discoverOnlyCatalogs = discoverOnlyCatalogs;
+    }
     return config;
   } catch (error) {
     return null;
@@ -314,7 +394,7 @@ const getProxyParam = (reqUrl: URL, config: ProxyConfig | null, key: keyof Proxy
 
 export const buildErdbImageUrl = (options: {
   reqUrl: URL;
-  imageType: 'poster' | 'backdrop' | 'logo';
+  imageType: 'poster' | 'backdrop' | 'logo' | 'thumbnail';
   erdbId: string;
   tmdbKey: string;
   mdblistKey: string;
